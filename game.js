@@ -394,14 +394,16 @@ function drawGround() {
 function renderRoad() {
     const track = TRACKS[selectedTrackId];
     const segments = track.segments;
-    const baseSegment = Math.floor(player.z / SEGMENT_LENGTH) % segments.length;
+    const trackLength = segments.length * SEGMENT_LENGTH;
+    
+    // Player position within the track (wrapping)
+    const playerZ = ((player.z % trackLength) + trackLength) % trackLength;
+    const baseSegment = Math.floor(playerZ / SEGMENT_LENGTH);
+    const basePercent = (playerZ % SEGMENT_LENGTH) / SEGMENT_LENGTH;
     
     let maxy = canvas.height;
     let x = 0;
     let dx = 0;
-    
-    // Calculate camera position based on player
-    const cameraZ = player.z - CAMERA_HEIGHT;
     
     // Draw segments from far to near
     const drawnSegments = [];
@@ -410,11 +412,14 @@ function renderRoad() {
         const segmentIndex = (baseSegment + n) % segments.length;
         const segment = segments[segmentIndex];
         
-        const z1 = (n * SEGMENT_LENGTH);
-        const z2 = ((n + 1) * SEGMENT_LENGTH);
+        // Z distance from camera, accounting for position within segment
+        const z1 = (n - basePercent) * SEGMENT_LENGTH;
+        const z2 = (n + 1 - basePercent) * SEGMENT_LENGTH;
         
-        const p1 = project({ x: x, y: segment.hill || 0, z: z1 + 1 }, player.x, CAMERA_HEIGHT, 0, CAMERA_DEPTH);
-        const p2 = project({ x: x + dx, y: (segments[(segmentIndex + 1) % segments.length].hill || 0), z: z2 + 1 }, player.x, CAMERA_HEIGHT, 0, CAMERA_DEPTH);
+        if (z1 < 1) continue; // Behind camera
+        
+        const p1 = project({ x: x, y: segment.hill || 0, z: z1 }, player.x, CAMERA_HEIGHT, 0, CAMERA_DEPTH);
+        const p2 = project({ x: x + dx, y: (segments[(segmentIndex + 1) % segments.length].hill || 0), z: z2 }, player.x, CAMERA_HEIGHT, 0, CAMERA_DEPTH);
         
         x += dx;
         dx += segment.curve;
@@ -428,7 +433,8 @@ function renderRoad() {
             index: segmentIndex,
             p1, p2, color,
             segment,
-            worldZ: player.z + n * SEGMENT_LENGTH
+            worldZ: (baseSegment + n) * SEGMENT_LENGTH,
+            screenIndex: n
         });
         
         maxy = p2.y;
@@ -436,7 +442,7 @@ function renderRoad() {
     
     // Draw from far to near
     for (let i = drawnSegments.length - 1; i >= 0; i--) {
-        const { p1, p2, color, segment, index, worldZ } = drawnSegments[i];
+        const { p1, p2, color, segment, index, worldZ, screenIndex } = drawnSegments[i];
         
         // Grass
         ctx.fillStyle = color ? track.grassLight : track.grassDark;
@@ -480,12 +486,12 @@ function renderRoad() {
         }
         
         // Draw items
-        if (segment.hasItem && i < 40) {
+        if (segment.hasItem && screenIndex < 40) {
             drawItemBox(p1, p2, worldZ);
         }
         
         // Draw obstacles
-        if (segment.hasObstacle && i < 40) {
+        if (segment.hasObstacle && screenIndex < 40) {
             drawObstacle(p1, p2, track.obstacles, index);
         }
     }
@@ -795,74 +801,99 @@ function drawPlayerWagon() {
 // AI RACERS
 // ============================================
 function initAIRacers() {
+    const track = TRACKS[selectedTrackId];
+    const trackLength = track.segments.length * SEGMENT_LENGTH;
+    
     aiRacers = AI_COLORS.map((colors, i) => ({
-        x: (i - 1) * 300,
-        z: -500 - i * 200,
-        speed: 200 + Math.random() * 50,
+        x: (i - 1) * 200, // Spread across the road
+        z: 500 + i * 300, // Start ahead of player
+        speed: 0,
+        baseSpeed: 220 + i * 15, // Different base speeds
         segment: 0,
         lap: 1,
         color: colors.body,
         hat: colors.hat,
         name: colors.name,
-        targetX: 0
+        targetX: 0,
+        trackLength: trackLength
     }));
 }
 
 function updateAIRacers(dt) {
     const track = TRACKS[selectedTrackId];
     const segments = track.segments;
+    const trackLength = segments.length * SEGMENT_LENGTH;
     
-    aiRacers.forEach(ai => {
-        // Move forward
+    aiRacers.forEach((ai, idx) => {
+        // Vary speed with some randomness
+        ai.speed = ai.baseSpeed + Math.sin(Date.now() * 0.002 + idx * 2) * 40;
+        
+        // Move forward (absolute position on track)
         ai.z += ai.speed * dt;
         
-        // Follow track curves
-        const segIndex = Math.floor((ai.z + player.z) / SEGMENT_LENGTH) % segments.length;
-        if (segIndex >= 0 && segIndex < segments.length) {
-            const seg = segments[segIndex];
-            ai.targetX = -seg.curve * 100;
-        }
-        
-        // Smooth steering toward target
-        ai.x += (ai.targetX - ai.x) * 0.02;
-        
-        // Add some randomness
-        ai.x += (Math.random() - 0.5) * 5;
-        
-        // Clamp to road
-        ai.x = Math.max(-ROAD_WIDTH * 0.4, Math.min(ROAD_WIDTH * 0.4, ai.x));
-        
-        // Lap tracking
-        const prevSeg = ai.segment;
-        ai.segment = segIndex;
-        if (prevSeg > segments.length - 5 && ai.segment < 5) {
+        // Wrap around track
+        const prevZ = ai.z;
+        if (ai.z >= trackLength) {
+            ai.z -= trackLength;
             ai.lap++;
         }
         
-        // Vary speed
-        ai.speed = 200 + Math.sin(Date.now() * 0.001 + aiRacers.indexOf(ai)) * 30;
+        // Get current segment for steering
+        const segIndex = Math.floor(ai.z / SEGMENT_LENGTH) % segments.length;
+        const seg = segments[segIndex];
+        
+        // Follow track curves
+        ai.targetX = -seg.curve * 150;
+        
+        // Smooth steering toward target
+        ai.x += (ai.targetX - ai.x) * 0.05;
+        
+        // Add slight wobble
+        ai.x += Math.sin(Date.now() * 0.005 + idx) * 2;
+        
+        // Clamp to road
+        ai.x = Math.max(-ROAD_WIDTH * 0.35, Math.min(ROAD_WIDTH * 0.35, ai.x));
+        
+        ai.segment = segIndex;
     });
 }
 
 function drawAIRacers(drawnSegments) {
-    aiRacers.forEach(ai => {
-        const relZ = ai.z;
+    const track = TRACKS[selectedTrackId];
+    const trackLength = track.segments.length * SEGMENT_LENGTH;
+    const playerZ = ((player.z % trackLength) + trackLength) % trackLength;
+    
+    // Sort AI racers by distance (draw far ones first)
+    const sortedAI = [...aiRacers].map(ai => {
+        // Calculate relative Z (how far ahead/behind player)
+        let relZ = ai.z - playerZ;
         
-        if (relZ < 0 || relZ > DRAW_DISTANCE * SEGMENT_LENGTH) return;
+        // Handle wrap-around
+        if (relZ < -trackLength / 2) relZ += trackLength;
+        if (relZ > trackLength / 2) relZ -= trackLength;
         
-        const segIndex = Math.floor(relZ / SEGMENT_LENGTH);
-        if (segIndex >= drawnSegments.length) return;
+        return { ...ai, relZ };
+    }).filter(ai => ai.relZ > 0 && ai.relZ < DRAW_DISTANCE * SEGMENT_LENGTH)
+      .sort((a, b) => b.relZ - a.relZ);
+    
+    sortedAI.forEach(ai => {
+        // Find the segment this AI is on
+        const segScreenIndex = Math.floor(ai.relZ / SEGMENT_LENGTH);
         
-        const seg = drawnSegments.find(s => Math.abs(s.worldZ - player.z - relZ) < SEGMENT_LENGTH);
+        if (segScreenIndex >= drawnSegments.length || segScreenIndex < 0) return;
+        
+        // Find matching drawn segment
+        const seg = drawnSegments.find(s => s.screenIndex === segScreenIndex);
         if (!seg) return;
         
-        const scale = seg.p1.scale * 0.8;
-        if (scale < 0.05) return;
+        const scale = seg.p1.scale * 0.7;
+        if (scale < 0.03) return;
         
+        // Position on road
         const screenX = seg.p1.x + (ai.x / ROAD_WIDTH) * seg.p1.w * 2;
         const screenY = seg.p1.y;
         
-        drawWagon(screenX, screenY, scale, ai.color, ai.hat, 0, false);
+        drawWagon(screenX, screenY, scale, ai.color, ai.hat, 0, ai.speed > ai.baseSpeed);
     });
 }
 
@@ -971,15 +1002,16 @@ function updateProjectiles(dt) {
         // Check collision with AI
         aiRacers.forEach(ai => {
             const dx = Math.abs(ai.x - p.x);
-            const dz = Math.abs((ai.z + player.z) - p.z);
-            if (dx < 100 && dz < 50) {
-                ai.speed *= 0.5; // Slow them down
-                ai.z -= 200; // Push back
+            const dz = Math.abs(ai.z - p.z);
+            if (dx < 150 && dz < 100) {
+                ai.baseSpeed *= 0.7; // Slow them down
+                ai.z -= 300; // Push back
                 p.timer = 0;
+                playTone(200, 0.2, 'square', 0.3);
             }
         });
         
-        return p.z < player.z + 2000 && p.z > player.z - 500;
+        return p.z < player.z + 3000 && p.z > player.z - 1000;
     });
 }
 
@@ -989,6 +1021,7 @@ function updateProjectiles(dt) {
 function updatePlayer(dt) {
     const track = TRACKS[selectedTrackId];
     const segments = track.segments;
+    const trackLength = segments.length * SEGMENT_LENGTH;
     
     // Steering
     let steerAmount = 0;
@@ -1016,26 +1049,30 @@ function updatePlayer(dt) {
     
     player.steering += (steerAmount - player.steering) * 0.1;
     
-    // Apply steering to position
-    player.x += player.steering * player.speed * dt * 0.5;
-    
-    // Track curve influence
-    const segIndex = Math.floor(player.z / SEGMENT_LENGTH) % segments.length;
+    // Get current segment
+    const playerZWrapped = ((player.z % trackLength) + trackLength) % trackLength;
+    const segIndex = Math.floor(playerZWrapped / SEGMENT_LENGTH) % segments.length;
     const segment = segments[segIndex];
-    player.x -= segment.curve * player.speed * dt * 0.1;
     
-    // Acceleration
-    let targetSpeed = 0;
+    // Apply steering to position (stronger when going fast)
+    player.x += player.steering * (player.speed / player.maxSpeed + 0.5) * dt * 400;
+    
+    // Track curve influence (pushes player outward on turns)
+    player.x -= segment.curve * player.speed * dt * 0.15;
+    
+    // Acceleration - AUTO ACCELERATE (always moving forward, like Mario Kart)
+    let targetSpeed = player.maxSpeed * 0.85; // Base auto-speed
+    
     if (keys.up) {
-        targetSpeed = player.maxSpeed;
+        targetSpeed = player.maxSpeed; // Full speed when holding up
     } else if (keys.down) {
-        targetSpeed = -player.maxSpeed * 0.3;
+        targetSpeed = player.maxSpeed * 0.3; // Slow down / brake
     }
     
     // Apply boost
     if (player.boostTimer > 0) {
         player.boostTimer--;
-        targetSpeed = player.maxSpeed;
+        targetSpeed = player.maxSpeed * 1.2;
         if (player.boostTimer === 0) {
             player.maxSpeed = 300;
         }
@@ -1049,27 +1086,31 @@ function updatePlayer(dt) {
         }
     }
     
-    // Accelerate/decelerate
+    // Accelerate/decelerate smoothly
     if (player.speed < targetSpeed) {
-        player.speed = Math.min(player.speed + 200 * dt, targetSpeed);
+        player.speed = Math.min(player.speed + 250 * dt, targetSpeed);
     } else {
-        player.speed = Math.max(player.speed - 300 * dt, targetSpeed);
+        player.speed = Math.max(player.speed - 200 * dt, targetSpeed);
     }
     
     // Off-road slowdown
     if (Math.abs(player.x) > ROAD_WIDTH * 0.45) {
-        player.speed *= 0.98;
-        player.x = Math.sign(player.x) * ROAD_WIDTH * 0.5;
+        player.speed *= 0.97;
+        // Soft clamp to road edge
+        if (Math.abs(player.x) > ROAD_WIDTH * 0.5) {
+            player.x = Math.sign(player.x) * ROAD_WIDTH * 0.5;
+        }
     }
     
     // Update position
     player.z += player.speed * dt;
     
-    // Lap detection
+    // Lap detection (crossing from last segments to first segments)
     const prevSegment = player.segment;
     player.segment = segIndex;
     
-    if (prevSegment > segments.length - 5 && player.segment < 5 && player.speed > 0) {
+    // Detect lap completion: was in last 10 segments, now in first 10 segments
+    if (prevSegment > segments.length - 10 && player.segment < 10 && player.speed > 0) {
         completeLap();
     }
     
@@ -1126,11 +1167,16 @@ function finishRace() {
 }
 
 function calculatePositions() {
+    const track = TRACKS[selectedTrackId];
+    const trackLength = track.segments.length * SEGMENT_LENGTH;
+    const playerZWrapped = ((player.z % trackLength) + trackLength) % trackLength;
+    
     const allRacers = [
-        { name: 'Player', lap: player.lap, z: player.z, segment: player.segment },
-        ...aiRacers.map(ai => ({ name: ai.name, lap: ai.lap, z: ai.z + player.z, segment: ai.segment }))
+        { name: 'Player', lap: player.lap, z: playerZWrapped },
+        ...aiRacers.map(ai => ({ name: ai.name, lap: ai.lap, z: ai.z }))
     ];
     
+    // Sort by lap first (higher is better), then by position on track (higher z is further ahead)
     allRacers.sort((a, b) => {
         if (a.lap !== b.lap) return b.lap - a.lap;
         return b.z - a.z;
