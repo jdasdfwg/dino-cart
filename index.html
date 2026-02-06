@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+    <title>Dino Cart - Western Racing</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="500"></canvas>
+        
+        <!-- HUD Overlay -->
+        <div id="hud" class="hidden">
+            <div id="hud-left">
+                <div id="position-display">1st</div>
+                <div id="lap-display">LAP 1/3</div>
+            </div>
+            <div id="hud-center">
+                <div id="item-box" class="hidden">
+                    <div id="item-icon"></div>
+                </div>
+            </div>
+            <div id="hud-right">
+                <div id="speed-gauge">
+                    <div id="speed-needle"></div>
+                    <div id="speed-value">0</div>
+                </div>
+                <div id="timer-display">
+                    <div id="current-lap-time">0:00.00</div>
+                    <div id="total-time">0:00.00</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Title Screen -->
+        <div id="title-screen">
+            <div class="title-content">
+                <canvas id="titleWagon" width="120" height="80"></canvas>
+                <h1>DINO CART</h1>
+                <p class="subtitle">Western Racing Championship</p>
+                <button id="btn-play" class="btn-main">RACE!</button>
+                <div class="controls-hint">
+                    <p>ARROWS / WASD - Steer & Accelerate</p>
+                    <p>SHIFT - Drift | SPACE - Use Item</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Track Select Screen -->
+        <div id="track-select-screen" class="hidden">
+            <div class="track-select-content">
+                <h1>SELECT TRACK</h1>
+                <div class="track-options">
+                    <div class="track-card" data-track="desert-canyon">
+                        <canvas class="track-preview" id="preview-canyon" width="200" height="120"></canvas>
+                        <h3>Desert Canyon</h3>
+                        <p class="track-desc">Tight turns through rocky canyons</p>
+                        <p class="track-best">Best: <span id="best-canyon">--:--</span></p>
+                    </div>
+                    <div class="track-card" data-track="sunset-mesa">
+                        <canvas class="track-preview" id="preview-mesa" width="200" height="120"></canvas>
+                        <h3>Sunset Mesa</h3>
+                        <p class="track-desc">Fast sweeping curves at sunset</p>
+                        <p class="track-best">Best: <span id="best-mesa">--:--</span></p>
+                    </div>
+                </div>
+                <button id="btn-back-title" class="btn-secondary">Back</button>
+            </div>
+        </div>
+
+        <!-- Countdown Overlay -->
+        <div id="countdown-overlay" class="hidden">
+            <div id="countdown-text">3</div>
+        </div>
+
+        <!-- Pause Screen -->
+        <div id="pause-screen" class="hidden">
+            <div class="pause-content">
+                <h1>PAUSED</h1>
+                <button id="btn-resume" class="btn-main">Resume</button>
+                <button id="btn-quit" class="btn-secondary">Quit Race</button>
+            </div>
+        </div>
+
+        <!-- Results Screen -->
+        <div id="results-screen" class="hidden">
+            <div class="results-content">
+                <h1 id="results-title">RACE COMPLETE!</h1>
+                <div class="results-stats">
+                    <div class="result-row">
+                        <span class="result-label">Position</span>
+                        <span id="result-position" class="result-value">1st</span>
+                    </div>
+                    <div class="result-row">
+                        <span class="result-label">Total Time</span>
+                        <span id="result-total-time" class="result-value">0:00.00</span>
+                    </div>
+                    <div class="result-row">
+                        <span class="result-label">Best Lap</span>
+                        <span id="result-best-lap" class="result-value">0:00.00</span>
+                    </div>
+                </div>
+                
+                <div class="results-layout">
+                    <div class="results-left">
+                        <div id="name-entry" class="name-entry">
+                            <p>Enter your initials:</p>
+                            <input type="text" id="name-input" class="name-input" maxlength="3" placeholder="AAA" autocomplete="off" autocapitalize="characters">
+                            <button id="btn-submit-score" class="btn-submit">SUBMIT</button>
+                        </div>
+                        <div class="results-buttons">
+                            <button id="btn-race-again" class="btn-main">Race Again</button>
+                            <button id="btn-change-track" class="btn-secondary">Change Track</button>
+                        </div>
+                    </div>
+                    <div class="results-right">
+                        <div id="leaderboard" class="leaderboard">
+                            <div class="leaderboard-tabs">
+                                <button id="tab-today" class="tab-btn active">TODAY</button>
+                                <button id="tab-alltime" class="tab-btn">ALL TIME</button>
+                            </div>
+                            <div id="leaderboard-list" class="leaderboard-list">
+                                <div class="loading">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Touch Controls -->
+    <div id="touch-controls" class="touch-controls">
+        <div class="touch-left">
+            <button id="btn-touch-left" class="touch-btn touch-steer" aria-label="Steer Left">&#9664;</button>
+        </div>
+        <div class="touch-center">
+            <button id="btn-touch-item" class="touch-btn touch-item" aria-label="Use Item">ITEM</button>
+        </div>
+        <div class="touch-right">
+            <button id="btn-touch-right" class="touch-btn touch-steer" aria-label="Steer Right">&#9654;</button>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
