@@ -401,48 +401,59 @@ function renderRoad() {
     const baseSegment = Math.floor(playerZ / SEGMENT_LENGTH);
     const basePercent = (playerZ % SEGMENT_LENGTH) / SEGMENT_LENGTH;
     
-    let maxy = canvas.height;
-    let x = 0;
-    let dx = 0;
+    // Pre-calculate AI racer relative positions
+    const aiRelativePositions = aiRacers.map(ai => {
+        let relZ = ai.z - playerZ;
+        // Handle wrap-around
+        if (relZ < -trackLength / 2) relZ += trackLength;
+        if (relZ > trackLength / 2) relZ -= trackLength;
+        return { ...ai, relZ };
+    }).filter(ai => ai.relZ > 0 && ai.relZ < DRAW_DISTANCE * SEGMENT_LENGTH);
     
-    // Draw segments from far to near
-    const drawnSegments = [];
+    let maxy = canvas.height;
+    
+    // First pass: calculate all segment projections with cumulative curve
+    const segmentData = [];
+    let cumX = 0;
+    let cumDX = 0;
     
     for (let n = 0; n < DRAW_DISTANCE; n++) {
         const segmentIndex = (baseSegment + n) % segments.length;
         const segment = segments[segmentIndex];
         
-        // Z distance from camera, accounting for position within segment
+        // Z distance from camera
         const z1 = (n - basePercent) * SEGMENT_LENGTH;
         const z2 = (n + 1 - basePercent) * SEGMENT_LENGTH;
         
-        if (z1 < 1) continue; // Behind camera
+        const currentX = cumX;
+        cumX += cumDX;
+        cumDX += segment.curve;
         
-        const p1 = project({ x: x, y: segment.hill || 0, z: z1 }, player.x, CAMERA_HEIGHT, 0, CAMERA_DEPTH);
-        const p2 = project({ x: x + dx, y: (segments[(segmentIndex + 1) % segments.length].hill || 0), z: z2 }, player.x, CAMERA_HEIGHT, 0, CAMERA_DEPTH);
+        if (z1 < 10) continue; // Too close to camera
         
-        x += dx;
-        dx += segment.curve;
+        const p1 = project({ x: currentX, y: segment.hill || 0, z: z1 }, player.x, CAMERA_HEIGHT, 0, CAMERA_DEPTH);
+        const p2 = project({ x: cumX, y: (segments[(segmentIndex + 1) % segments.length].hill || 0), z: z2 }, player.x, CAMERA_HEIGHT, 0, CAMERA_DEPTH);
         
         if (p1.y >= maxy) continue;
         if (p2.y >= p1.y) continue;
         
         const color = (Math.floor(segmentIndex / 2) % 2) === 0;
         
-        drawnSegments.push({
+        segmentData.push({
             index: segmentIndex,
             p1, p2, color,
             segment,
-            worldZ: (baseSegment + n) * SEGMENT_LENGTH,
+            z1, z2,
+            cumX: currentX,
             screenIndex: n
         });
         
         maxy = p2.y;
     }
     
-    // Draw from far to near
-    for (let i = drawnSegments.length - 1; i >= 0; i--) {
-        const { p1, p2, color, segment, index, worldZ, screenIndex } = drawnSegments[i];
+    // Draw from far to near (back to front)
+    for (let i = segmentData.length - 1; i >= 0; i--) {
+        const { p1, p2, color, segment, index, z1, z2, cumX, screenIndex } = segmentData[i];
         
         // Grass
         ctx.fillStyle = color ? track.grassLight : track.grassDark;
@@ -457,12 +468,10 @@ function renderRoad() {
         const rumbleW2 = p2.w * 1.15;
         const rumbleColor = color ? COLORS.RUMBLE_LIGHT : COLORS.RUMBLE_DARK;
         
-        // Left rumble
         drawTrapezoid(p1.x - p1.w, p1.y, rumbleW1 - p1.w, p2.x - p2.w, p2.y, rumbleW2 - p2.w, rumbleColor);
-        // Right rumble
         drawTrapezoid(p1.x + p1.w, p1.y, rumbleW1 - p1.w, p2.x + p2.w, p2.y, rumbleW2 - p2.w, rumbleColor);
         
-        // Lane markers (on light segments only for dashed effect)
+        // Lane markers
         if (color) {
             const laneW = p1.w * 0.02;
             ctx.fillStyle = COLORS.LANE_MARKER;
@@ -473,7 +482,6 @@ function renderRoad() {
         if (index === 0) {
             ctx.fillStyle = '#ffffff';
             drawTrapezoid(p1.x, p1.y, p1.w * 0.9, p2.x, p2.y, p2.w * 0.9, '#ffffff');
-            // Checkerboard pattern
             const checks = 8;
             const checkW = (p1.w * 2) / checks;
             for (let c = 0; c < checks; c++) {
@@ -487,16 +495,35 @@ function renderRoad() {
         
         // Draw items
         if (segment.hasItem && screenIndex < 40) {
-            drawItemBox(p1, p2, worldZ);
+            drawItemBox(p1, p2, z1);
         }
         
         // Draw obstacles
         if (segment.hasObstacle && screenIndex < 40) {
             drawObstacle(p1, p2, track.obstacles, index);
         }
+        
+        // Draw AI racers that fall within this segment's Z range
+        aiRelativePositions.forEach(ai => {
+            if (ai.relZ >= z1 && ai.relZ < z2) {
+                // Interpolate position within segment
+                const t = (ai.relZ - z1) / (z2 - z1);
+                const screenX = p1.x + (p2.x - p1.x) * t;
+                const screenY = p1.y + (p2.y - p1.y) * t;
+                const screenW = p1.w + (p2.w - p1.w) * t;
+                const scale = p1.scale + (p2.scale - p1.scale) * t;
+                
+                // Apply AI's lateral position
+                const aiScreenX = screenX + (ai.x / ROAD_WIDTH) * screenW * 2;
+                
+                // Draw wagon with appropriate scale
+                const wagonScale = Math.max(0.1, scale * 0.6);
+                drawWagon(aiScreenX, screenY, wagonScale, ai.color, ai.hat, 0, false);
+            }
+        });
     }
     
-    return drawnSegments;
+    return segmentData;
 }
 
 function drawTrapezoid(x1, y1, w1, x2, y2, w2, color) {
@@ -858,44 +885,7 @@ function updateAIRacers(dt) {
     });
 }
 
-function drawAIRacers(drawnSegments) {
-    const track = TRACKS[selectedTrackId];
-    const trackLength = track.segments.length * SEGMENT_LENGTH;
-    const playerZ = ((player.z % trackLength) + trackLength) % trackLength;
-    
-    // Sort AI racers by distance (draw far ones first)
-    const sortedAI = [...aiRacers].map(ai => {
-        // Calculate relative Z (how far ahead/behind player)
-        let relZ = ai.z - playerZ;
-        
-        // Handle wrap-around
-        if (relZ < -trackLength / 2) relZ += trackLength;
-        if (relZ > trackLength / 2) relZ -= trackLength;
-        
-        return { ...ai, relZ };
-    }).filter(ai => ai.relZ > 0 && ai.relZ < DRAW_DISTANCE * SEGMENT_LENGTH)
-      .sort((a, b) => b.relZ - a.relZ);
-    
-    sortedAI.forEach(ai => {
-        // Find the segment this AI is on
-        const segScreenIndex = Math.floor(ai.relZ / SEGMENT_LENGTH);
-        
-        if (segScreenIndex >= drawnSegments.length || segScreenIndex < 0) return;
-        
-        // Find matching drawn segment
-        const seg = drawnSegments.find(s => s.screenIndex === segScreenIndex);
-        if (!seg) return;
-        
-        const scale = seg.p1.scale * 0.7;
-        if (scale < 0.03) return;
-        
-        // Position on road
-        const screenX = seg.p1.x + (ai.x / ROAD_WIDTH) * seg.p1.w * 2;
-        const screenY = seg.p1.y;
-        
-        drawWagon(screenX, screenY, scale, ai.color, ai.hat, 0, ai.speed > ai.baseSpeed);
-    });
-}
+// AI racers are now drawn inline within renderRoad() for correct depth ordering
 
 // ============================================
 // ITEMS SYSTEM
@@ -1597,8 +1587,7 @@ function gameLoop(timestamp) {
         
         drawSky();
         drawGround();
-        const drawnSegments = renderRoad();
-        drawAIRacers(drawnSegments);
+        renderRoad(); // Also draws AI racers inline
         drawPlayerWagon();
         
         // Drift indicator
